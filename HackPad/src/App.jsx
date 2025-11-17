@@ -6,6 +6,9 @@ import { TargetCursor } from './TargetCursor.jsx';
 import DarkVeil from './DarkVeil.jsx';
 
 function App() {
+  // Configure Axios base URL from environment (Render: set VITE_BACKEND_URL)
+  // Keeps endpoints like '/syllabus' and '/generar' unchanged; only the origin is injected.
+  axios.defaults.baseURL = import.meta.env.VITE_BACKEND_URL || '';
   const [files, setFiles] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -39,7 +42,7 @@ function App() {
     }
     try {
   // If schedule is attached, call the combined endpoint to return both (ZIP when both present)
-  const endpoint = scheduleAttached ? '/api/generar' : '/api/syllabus';
+  const endpoint = scheduleAttached ? '/generar' : '/syllabus';
       const response = await axios.post(endpoint, formData, {
         responseType: 'blob',
         onUploadProgress: (progressEvent) => {

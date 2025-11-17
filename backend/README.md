@@ -28,4 +28,14 @@ Debe responder:
 
 ```
 {"status":"ok"}
+
+## Configuración de CORS / Render
+
+El backend permite CORS hacia orígenes conocidos y también usa una variable de entorno opcional para agregar tu frontend desplegado:
+
+- Variable: `FRONTEND_URL`
+	- Ejemplo (Render): `https://syllabus-unifier-web.onrender.com`
+
+Además, ya está incluido explícitamente `https://syllabus-unifier-web.onrender.com` en la lista por defecto. Si usas otro dominio, define `FRONTEND_URL` para añadirlo.
+
 ```
