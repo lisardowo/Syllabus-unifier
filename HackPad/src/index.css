@@ -2,10 +2,10 @@
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
+  position: fixed;
   color-scheme: light dark;
   color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+  background-color: transparent; /* allow WebGL background to show */
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -22,12 +22,18 @@ a:hover {
   color: #535bf2;
 }
 
+html, body, #root {
+  height: 100%;
+  position:fixed;                                                                                                                                                                             
+}
+
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
+  /* Avoid centering layout to let background cover full width */
+  display: block;
   min-width: 320px;
   min-height: 100vh;
+  background: transparent; /* show background effect */
 }
 
 h1 {
@@ -57,7 +63,7 @@ button:focus-visible {
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;
-    background-color: #ffffff;
+    background-color: transparent; /* keep transparent in light mode too */
   }
   a:hover {
     color: #747bff;

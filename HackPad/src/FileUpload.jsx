@@ -14,7 +14,7 @@ function FileUpload({ onFilesSelected }) {
     <section className="file-upload">
       <div {...getRootProps({ className: 'dropzone' })}>
         <input {...getInputProps()} />
-        <p>Arrastra y suelta tus archivos PDF aquí, o haz clic para seleccionarlos.</p>
+        <p className="cursor-target">Arrastra y suelta tus archivos PDF aquí, o haz clic para seleccionarlos.</p>
       </div>
       <aside>
         <h4>Archivos seleccionados:</h4>

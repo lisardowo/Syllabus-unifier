@@ -7,6 +7,7 @@ from reportlab.pdfgen import canvas
 import re
 import io
 from datetime import datetime
+import traceback
 
 MONTHS_ES = {
     'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4, 'mayo': 5, 'junio': 6,
@@ -81,13 +82,18 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["*"],  # incluye OPTIONS
     allow_headers=["*"],
 )
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+# Manejo explícito de preflight para /generar (útil si algún proxy o servidor intermedio no respeta CORS por defecto)
+@app.options("/generar")
+def preflight_generar():
+    return Response(status_code=200)
 
 def extract_dates(text):
     results = []
@@ -140,79 +146,104 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
     c.drawString(40, y, "Resumen Académico Unificado")
     y -= 30
     c.setFont("Helvetica", 12)
-    for idx, file in enumerate(files):
-        print(f"[LOG] Procesando archivo {idx+1}/{len(files)}: {file.filename}")
-        nombre_curso = file.filename.rsplit('.', 1)[0]
-        contenido = await file.read()
-        print(f"[LOG] Leyendo PDF: {file.filename}")
-        reader = PdfReader(io.BytesIO(contenido))
-        texto = "\n".join(page.extract_text() or '' for page in reader.pages)
-        print(f"[LOG] Extrayendo fechas importantes...")
-        fechas = extract_dates(texto)
-        print(f"[LOG] Extrayendo temario...")
-        temas = extract_section(texto, ["temario", "contenidos", "unidades", "temas"])
-        print(f"[LOG] Extrayendo recursos y bibliografía...")
-        recursos = extract_section(texto, ["bibliografía", "recursos", "lecturas", "material"])
-        print(f"[LOG] Extrayendo contacto docente...")
-        nombre, email = extract_contact(texto)
-        print(f"[LOG] Extrayendo reglamento especial...")
-        reglamento = extract_section(texto, ["reglamento", "normas", "política", "condiciones"])
-        print(f"[LOG] Generando PDF para {nombre_curso}")
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(40, y, f"Curso: {nombre_curso}")
-        y -= 22
+    errores: list[str] = []
+    try:
+        for idx, file in enumerate(files):
+            try:
+                print(f"[LOG] Procesando archivo {idx+1}/{len(files)}: {file.filename}")
+                nombre_curso = file.filename.rsplit('.', 1)[0]
+                contenido = await file.read()
+                print(f"[LOG] Leyendo PDF: {file.filename}")
+                reader = PdfReader(io.BytesIO(contenido))
+                texto = "\n".join(page.extract_text() or '' for page in reader.pages)
+                print(f"[LOG] Extrayendo fechas importantes...")
+                fechas = extract_dates(texto)
+                print(f"[LOG] Extrayendo temario...")
+                temas = extract_section(texto, ["temario", "contenidos", "unidades", "temas"])
+                print(f"[LOG] Extrayendo recursos y bibliografía...")
+                recursos = extract_section(texto, ["bibliografía", "recursos", "lecturas", "material"])
+                print(f"[LOG] Extrayendo contacto docente...")
+                nombre, email = extract_contact(texto)
+                print(f"[LOG] Extrayendo reglamento especial...")
+                reglamento = extract_section(texto, ["reglamento", "normas", "política", "condiciones"])
+                print(f"[LOG] Generando PDF para {nombre_curso}")
+                c.setFont("Helvetica-Bold", 14)
+                c.drawString(40, y, f"Curso: {nombre_curso}")
+                y -= 22
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(40, y, "Fechas importantes:")
+                y -= 18
+                c.setFont("Helvetica", 11)
+                for f in fechas:
+                    c.drawString(60, y, f[:110])
+                    y -= 14
+                    if y < 80:
+                        c.showPage(); y = height - 40
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(40, y, "Temario:")
+                y -= 18
+                c.setFont("Helvetica", 11)
+                for line in temas.splitlines():
+                    c.drawString(60, y, line[:110])
+                    y -= 14
+                    if y < 80:
+                        c.showPage(); y = height - 40
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(40, y, "Recursos y bibliografía:")
+                y -= 18
+                c.setFont("Helvetica", 11)
+                for line in recursos.splitlines():
+                    c.drawString(60, y, line[:110])
+                    y -= 14
+                    if y < 80:
+                        c.showPage(); y = height - 40
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(40, y, "Contacto docente:")
+                y -= 18
+                c.setFont("Helvetica", 11)
+                c.drawString(60, y, f"Nombre: {nombre}")
+                y -= 14
+                c.drawString(60, y, f"Email: {email}")
+                y -= 18
+                if y < 80:
+                    c.showPage(); y = height - 40
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(40, y, "Reglamento especial:")
+                y -= 18
+                c.setFont("Helvetica", 11)
+                for line in reglamento.splitlines():
+                    c.drawString(60, y, line[:110])
+                    y -= 14
+                    if y < 80:
+                        c.showPage(); y = height - 40
+                y -= 20
+                if y < 80:
+                    c.showPage(); y = height - 40
+                print(f"[LOG] PDF generado para {nombre_curso}")
+            except Exception as e:
+                tb = traceback.format_exc()
+                print(f"[ERROR] Falló el procesamiento de {file.filename}: {e}\n{tb}")
+                errores.append(f"{file.filename}: {e}")
+        if errores:
+            c.showPage()
+            c.setFont("Helvetica-Bold", 14)
+            c.drawString(40, height - 60, "Archivos con errores de procesamiento:")
+            c.setFont("Helvetica", 11)
+            yerr = height - 90
+            for msg in errores:
+                c.drawString(60, yerr, msg[:110])
+                yerr -= 14
+                if yerr < 80:
+                    c.showPage(); yerr = height - 60
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[ERROR] Fallo inesperado en /generar: {e}\n{tb}")
+        # cerramos PDF con nota de error
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(40, y, "Fechas importantes:")
-        y -= 18
-        c.setFont("Helvetica", 11)
-        for f in fechas:
-            c.drawString(60, y, f[:110])
-            y -= 14
-            if y < 80:
-                c.showPage(); y = height - 40
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(40, y, "Temario:")
-        y -= 18
-        c.setFont("Helvetica", 11)
-        for line in temas.splitlines():
-            c.drawString(60, y, line[:110])
-            y -= 14
-            if y < 80:
-                c.showPage(); y = height - 40
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(40, y, "Recursos y bibliografía:")
-        y -= 18
-        c.setFont("Helvetica", 11)
-        for line in recursos.splitlines():
-            c.drawString(60, y, line[:110])
-            y -= 14
-            if y < 80:
-                c.showPage(); y = height - 40
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(40, y, "Contacto docente:")
-        y -= 18
-        c.setFont("Helvetica", 11)
-        c.drawString(60, y, f"Nombre: {nombre}")
-        y -= 14
-        c.drawString(60, y, f"Email: {email}")
-        y -= 18
-        if y < 80:
-            c.showPage(); y = height - 40
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(40, y, "Reglamento especial:")
-        y -= 18
-        c.setFont("Helvetica", 11)
-        for line in reglamento.splitlines():
-            c.drawString(60, y, line[:110])
-            y -= 14
-            if y < 80:
-                c.showPage(); y = height - 40
-        y -= 20
-        if y < 80:
-            c.showPage(); y = height - 40
-        print(f"[LOG] PDF generado para {nombre_curso}")
-    c.save()
-    buffer.seek(0)
+        c.drawString(40, y, "Se produjo un error inesperado durante el procesamiento.")
+    finally:
+        c.save()
+        buffer.seek(0)
     print("[LOG] PDF final generado y listo para enviar al frontend.")
     return Response(content=buffer.read(), media_type="application/pdf", headers={
         "Content-Disposition": "attachment; filename=syllabus_unificado.pdf"
