@@ -1,0 +1,36 @@
+# Node modules
+HackPad/node_modules/
+
+# Python virtual environments
+backend/.venv/
+
+# Python cache
+backend/__pycache__/
+
+# PDF uploads or temp files (if used)
+backend/uploads/
+*.pdf
+
+# IDE/editor files
+.vscode/
+*.swp
+*.sublime-workspace
+*.sublime-project
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build output
+HackPad/dist/
+
+# Logs
+*.log
+
+# Environment/config
+.env
+.env.*
+
+# Misc
+*.bak
+*.tmp

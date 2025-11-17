@@ -1,0 +1,35 @@
+
+...
+
+The theme was right in front of y'all the ENTIRE time.
+
+"Student" Hackpad
+Built by students
+For students
+
+top 10 anime plot twists  
+
+Anyways
+Theme: Make tools that help students
+
+The theme was right in front of y'all the ENTIRE time.
+
+-Learning platforms that make education better/more accessible
+-Productivity tools that help with note-taking and organisation
+-Mental health resources that support student wellbeing
+-Community tools that connect students with similar interests
+-Anything that makes student life better, literally anything!
+
+...
+
+ What models to use
+
+ Claude Sonnet 4.5
+ 	General-purpose coding and agent tasks	Complex problem-solving challenges, sophisticated reasoning	// for explaining
+    Agent mode
+ GPT-5	
+    Deep reasoning and debugging Multi-step problem solving and architecture-level code analysis // debugging
+    Reasoning
+GPT-4.1	
+    General-purpose coding and writing	Fast, accurate code completions and explanations // General purpose coding
+    Agent mode, vision
