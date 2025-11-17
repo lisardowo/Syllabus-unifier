@@ -11,6 +11,7 @@ function App() {
   const [error, setError] = useState('');
   const [progress, setProgress] = useState(0);
   const [statusText, setStatusText] = useState('');
+  const [scheduleAttached, setScheduleAttached] = useState(false);
 
   const handleFilesSelected = (selectedFiles) => {
     setFiles(selectedFiles);
@@ -33,7 +34,9 @@ function App() {
       formData.append('files', file);
     });
     try {
-      const response = await axios.post('/api/generar', formData, {
+  // If schedule is attached, call the combined endpoint to return both (ZIP when both present)
+  const endpoint = scheduleAttached ? '/api/generar' : '/api/syllabus';
+      const response = await axios.post(endpoint, formData, {
         responseType: 'blob',
         onUploadProgress: (progressEvent) => {
           if (progressEvent.total) {
@@ -43,19 +46,33 @@ function App() {
         }
       });
       setProgress(100);
-      setStatusText('Creando PDF...');
-      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const contentType = response.headers['content-type'] || '';
+      const disposition = response.headers['content-disposition'] || '';
+      let filename = 'download';
+      const match = disposition.match(/filename\s*=\s*([^;]+)/i);
+      if (match && match[1]) {
+        filename = match[1].replace(/\"/g, '').trim();
+      } else if (contentType.includes('text/calendar')) {
+        filename = 'class_schedule.ics';
+      } else if (contentType.includes('application/pdf')) {
+        filename = 'resumen_syllabus.pdf';
+      } else if (contentType.includes('application/zip')) {
+        filename = 'syllabus_and_schedule.zip';
+      }
+      setStatusText(`Descargando ${filename}...`);
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: contentType }));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', 'resumen_syllabus.pdf');
+      link.setAttribute('download', filename);
       document.body.appendChild(link);
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
       setFiles([]);
-      setStatusText('¡PDF generado y descargado!');
+      setStatusText('¡Archivo generado y descargado!');
+      setScheduleAttached(false);
     } catch (err) {
-      setError('Error al generar el resumen del syllabus.');
+      setError('Error al generar el archivo.');
       setStatusText('Error en el procesamiento.');
     }
     setIsLoading(false);
@@ -116,6 +133,24 @@ function App() {
           >
             {isLoading ? 'Processing...' : 'Generate Summary'}
           </button>
+          {/* Checkbox directly below the button */}
+          <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+            <label style={{ cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={scheduleAttached}
+                onChange={(e) => setScheduleAttached(e.target.checked)}
+                style={{ marginRight: '0.5rem' }}
+              />
+              Schedule attached (generate .ics)
+            </label>
+            <span className="tooltip">
+              <span className="tooltip-button">?</span>
+              <span className="tooltip-text">
+                Placeholder: Tick this if one of the uploaded PDFs contains your weekly schedule (days and times). We will generate an .ics calendar file you can import.
+              </span>
+            </span>
+          </div>
           {isLoading && (
             <div style={{ marginTop: '1rem', width: '100%' }}>
               <div style={{ background: '#eee', borderRadius: '8px', height: '18px', width: '60%', margin: '0 auto', overflow: 'hidden' }}>

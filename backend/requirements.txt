@@ -4,3 +4,4 @@ pypdf
 ics
 python-multipart
 reportlab
+pdfplumber
