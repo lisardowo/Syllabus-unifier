@@ -1,3 +1,6 @@
+# Team Members
+Lisardo Sobrado Morales
+
 # Syllabus Unifier
 
 A student-built tool designed to simplify academic life by unifying course syllabi and schedules into easily digestible formats. Built during a hackathon with the theme "Make tools that help students."
