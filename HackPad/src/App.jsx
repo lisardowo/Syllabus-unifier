@@ -12,6 +12,7 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [statusText, setStatusText] = useState('');
   const [scheduleAttached, setScheduleAttached] = useState(false);
+  const [semesterStart, setSemesterStart] = useState('');
 
   const handleFilesSelected = (selectedFiles) => {
     setFiles(selectedFiles);
@@ -33,6 +34,9 @@ function App() {
     files.forEach(file => {
       formData.append('files', file);
     });
+    if (scheduleAttached && semesterStart) {
+      formData.append('semester_start', semesterStart);
+    }
     try {
   // If schedule is attached, call the combined endpoint to return both (ZIP when both present)
   const endpoint = scheduleAttached ? '/api/generar' : '/api/syllabus';
@@ -41,7 +45,7 @@ function App() {
         onUploadProgress: (progressEvent) => {
           if (progressEvent.total) {
             setProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total));
-            setStatusText('Procesando archivos...');
+            setStatusText('Processing Files...');
           }
         }
       });
@@ -70,7 +74,8 @@ function App() {
       window.URL.revokeObjectURL(url);
       setFiles([]);
       setStatusText('¡Archivo generado y descargado!');
-      setScheduleAttached(false);
+  setScheduleAttached(false);
+  setSemesterStart('');
     } catch (err) {
       setError('Error al generar el archivo.');
       setStatusText('Error en el procesamiento.');
@@ -147,10 +152,23 @@ function App() {
             <span className="tooltip">
               <span className="tooltip-button">?</span>
               <span className="tooltip-text">
-                Placeholder: Tick this if one of the uploaded PDFs contains your weekly schedule (days and times). We will generate an .ics calendar file you can import.
+                : Tick this if one of the uploaded PDFs contains your weekly schedule (days and times). We will generate an .ics calendar file you can import.
               </span>
             </span>
           </div>
+          {/* Optional semester start date input */}
+          {scheduleAttached && (
+            <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>Semester start:</span>
+                <input
+                  type="date"
+                  value={semesterStart}
+                  onChange={(e) => setSemesterStart(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
           {isLoading && (
             <div style={{ marginTop: '1rem', width: '100%' }}>
               <div style={{ background: '#eee', borderRadius: '8px', height: '18px', width: '60%', margin: '0 auto', overflow: 'hidden' }}>

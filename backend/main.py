@@ -20,11 +20,14 @@ DAY_NAMES = {
     'lu': 0, 'ma': 1, 'mi': 2, 'ju': 3, 'vi': 4, 'sa': 5, 'do': 6
 }
 
-# Day token and time patterns (supports AM/PM and minute-optional)
+# Day token and time patterns
 DAY_TOKEN = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|lun|mar|mie|mié|jue|vie|sab|sáb|dom|lu|ma|mi|ju|vi|sa|do"
-TIME_TOKEN = r"\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?"
+# Safer inline day tokens (exclude 2-letter forms to reduce false positives like 'sa' in 'casa')
+DAY_TOKEN_INLINE = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|lun|mar|mie|mié|jue|vie|sab|sáb|dom"
+# Time token tightened to avoid false positives like "7-8"; require HH:MM optionally with am/pm OR H am/pm
+TIME_TOKEN = r"(?:\d{1,2}:\d{2}\s*(?:am|pm|a\.m\.|p\.m\.)?|\d{1,2}\s*(?:am|pm|a\.m\.|p\.m\.))"
 SCHEDULE_PATTERN = re.compile(
-    rf"(?P<days>(?:{DAY_TOKEN})(?:\s*(?:/|,|y|and|&)+\s*(?:{DAY_TOKEN}))*)\s*[:\-–—]?\s*(?P<start>{TIME_TOKEN})\s*(?:-|–|—|a|to)\s*(?P<end>{TIME_TOKEN})",
+    rf"(?P<days>(?:\b(?:{DAY_TOKEN_INLINE})\b)(?:\s*(?:/|,|y|and|&)+\s*(?:\b(?:{DAY_TOKEN_INLINE})\b))*)\s*[:\-–—]?\s*(?P<start>{TIME_TOKEN})\s*(?:-|–|—|a|to)\s*(?P<end>{TIME_TOKEN})",
     re.IGNORECASE
 )
 
@@ -68,7 +71,7 @@ def extract_schedule(text):
         end_raw = m.group('end')
         start = _parse_time_24(start_raw)
         end = _parse_time_24(end_raw)
-        for day_token in re.findall(rf"{DAY_TOKEN}", days_raw, flags=re.IGNORECASE):
+        for day_token in re.findall(rf"\b({DAY_TOKEN_INLINE})\b", days_raw, flags=re.IGNORECASE):
             key = _strip_accents(day_token.lower())
             weekday = DAY_NAMES.get(key)
             if weekday is not None:
@@ -147,20 +150,23 @@ async def generate_schedule_ics(files: List[UploadFile] = File(...)):
         start_time = datetime.strptime(start, "%H:%M")
         end_time = datetime.strptime(end, "%H:%M")
         first_date = next_weekday(today, weekday)
-        event_start = first_date.replace(hour=start_time.hour, minute=start_time.minute, second=0, microsecond=0)
-        event_end = first_date.replace(hour=end_time.hour, minute=end_time.minute, second=0, microsecond=0)
-        event = Event()
-        event.name = f"Class Session"
-        event.begin = event_start
-        event.end = event_end
-        event.uid = str(uuid.uuid4())
-        event.description = f"Imported from syllabus PDF."
-        cal.events.add(event)
+        # Create 15 weekly occurrences
+        for wk in range(15):
+            occ_start = first_date + timedelta(days=7 * wk)
+            event_start = occ_start.replace(hour=start_time.hour, minute=start_time.minute, second=0, microsecond=0)
+            event_end = occ_start.replace(hour=end_time.hour, minute=end_time.minute, second=0, microsecond=0)
+            event = Event()
+            event.name = f"Class Session"
+            event.begin = event_start
+            event.end = event_end
+            event.uid = str(uuid.uuid4())
+            event.description = f"Imported from syllabus PDF."
+            cal.events.add(event)
     ics_bytes = str(cal).encode("utf-8")
     return Response(content=ics_bytes, media_type="text/calendar", headers={
         "Content-Disposition": "attachment; filename=class_schedule.ics"
     })
-from fastapi import FastAPI, UploadFile, File, Response
+from fastapi import FastAPI, UploadFile, File, Response, Form
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from pypdf import PdfReader
@@ -238,7 +244,7 @@ def try_parse_date(fragment: str) -> datetime | None:
             return datetime(year, month, day, 9, 0)
     return None
 
-app = FastAPI()
+# NOTE: Removed duplicate FastAPI() instantiation to preserve previously registered routes (e.g., /generate_schedule_ics)
 
 # Permitir CORS para frontend en localhost:5173 y 3000
 ALLOWED_ORIGINS = [
@@ -304,6 +310,257 @@ def extract_contact(text):
             break
     return name or "Not found", email.group(0) if email else "Not found"
 
+EVAL_LABEL_HINTS = [
+    # Spanish
+    "examen", "exámenes", "parcial", "parciales", "final", "tarea", "tareas", "trabajo", "trabajos",
+    "proyecto", "proyectos", "práctica", "prácticas", "practica", "practicas", "laboratorio", "laboratorios",
+    "participación", "participacion", "asistencia", "quiz", "quices", "exposición", "exposicion", "presentación", "presentacion",
+    # English
+    "exam", "midterm", "final", "homework", "assignment", "assignments", "project", "projects", "lab",
+    "labs", "participation", "attendance", "quiz", "quizzes", "presentation"
+]
+
+def extract_evaluation_items(text: str) -> list[str]:
+    """Extract evaluation criteria lines like 'Exam - 20%' or '20% Homework'.
+    Prefer scanning inside an evaluation/grading section; fallback to keyword lines.
+    Returns list of 'Label: XX%'.
+    """
+    # 1) Try to narrow to an evaluation section
+    eval_section = extract_section(
+        text,
+        [
+            "criterios de evaluación", "criterios de evaluacion", "evaluación", "evaluacion",
+            "evaluación y calificación", "calificación", "calificacion",
+            "evaluation", "grading", "assessment",
+        ],
+        max_length=1600,
+    )
+    search_text = eval_section if eval_section and eval_section != "Not found" else text
+
+    items: list[tuple[str, int]] = []
+    # Pattern A: Label before percent (e.g., "Examen Final - 30%")
+    pat_a = re.compile(r"(?P<label>[A-Za-zÁÉÍÓÚáéíóúñÑ\/( )]{3,}?)\s*[:\-–—]?\s*(?P<pct>\d{1,3})\s*%", re.IGNORECASE)
+    # Pattern B: Percent before label (e.g., "30% Proyecto Integrador")
+    pat_b = re.compile(r"(?P<pct>\d{1,3})\s*%\s*(?P<label>[A-Za-zÁÉÍÓÚáéíóúñÑ\/( )]{3,})", re.IGNORECASE)
+
+    # Split by lines to reduce cross-line noise
+    for raw_line in search_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        low = _strip_accents(line.lower())
+        # If not in narrowed section, require at least one hint to avoid false positives
+        if search_text is text:
+            if not any(h in low for h in EVAL_LABEL_HINTS):
+                continue
+        m = pat_a.search(line) or pat_b.search(line)
+        if not m:
+            continue
+        label = m.group('label').strip()
+        pct = int(m.group('pct'))
+        if pct < 0 or pct > 100:
+            continue
+        # Clean label: collapse spaces and common trailing punctuation
+        label = re.sub(r"\s+", " ", label)
+        label = re.sub(r"\s*[:\-–—]$", "", label)
+        # Heuristic: drop lone words like 'total', 'nota', 'score'
+        if _strip_accents(label.lower()) in {"total", "nota", "score"}:
+            continue
+        items.append((label, pct))
+
+    # Deduplicate by label+percent, keep order
+    seen = set()
+    out: list[str] = []
+    for label, pct in items:
+        key = (label.lower(), pct)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f"{label}: {pct}%")
+    return out
+
+def extract_enumerated_syllabus(text: str, max_items: int = 100) -> list[str]:
+    """Extract enumerated syllabus topics like:
+    1.1 Tema, 1.2 Tema, 2.3.4 Subtema, and also 1. Tema.
+    Returns a flat list preserving order.
+    """
+    items: list[str] = []
+    lines = text.splitlines()
+    # 1.1 or 1.1.1 patterns
+    pat_multi = re.compile(r"^\s*(?P<num>\d+(?:\.\d+){1,3})\s*[\)\.-]?\s+(?P<title>\S(?:.*\S)?)\s*$")
+    # 1. patterns (single level with a dot, parenthesis, or dash)
+    pat_single = re.compile(r"^\s*(?P<num>\d+)\s*[\)\.-]\s+(?P<title>\S(?:.*\S)?)\s*$")
+    for line in lines:
+        m = pat_multi.match(line) or pat_single.match(line)
+        if not m:
+            continue
+        num = m.group('num')
+        title = m.group('title').strip()
+        # Avoid capturing page numbers or isolated numbers as titles
+        if not title or len(title) < 2:
+            continue
+        # Remove trailing dots from title
+        title = re.sub(r"\s*\.+$", "", title)
+        items.append(f"{num} {title}")
+        if len(items) >= max_items:
+            break
+    return items
+
+# ------------------------------
+# PDF sanitation helpers
+# ------------------------------
+def sanitize_pdf_header(raw: bytes) -> bytes:
+    """Trim leading garbage before %PDF if present."""
+    idx = raw.find(b'%PDF')
+    if idx > 0:
+        return raw[idx:]
+    return raw
+
+def pdf_truncated(raw: bytes) -> bool:
+    """Detect missing EOF marker (heuristic)."""
+    tail = raw[-64:]
+    return b'%%EOF' not in tail
+
+def extract_pdf_text(bytes_in: bytes, errores: list[str], fname: str) -> tuple[str, list[str]]:
+    """Return extracted text and a list of warnings for this file."""
+    warnings: list[str] = []
+    sanitized = sanitize_pdf_header(bytes_in)
+    if sanitized is not bytes_in:
+        warnings.append("Header adjusted (garbage before %PDF removed)")
+    if pdf_truncated(bytes_in):
+        warnings.append("EOF marker missing or truncated")
+    try:
+        reader = PdfReader(io.BytesIO(sanitized))
+        texto = "\n".join(page.extract_text() or '' for page in reader.pages)
+        if not texto.strip():
+            warnings.append("No extractable text (possible image-based PDF)")
+        return texto, warnings
+    except Exception as e:
+        errores.append(f"{fname}: PDF parse failed: {e}")
+        return "", warnings + ["Parse failed"]
+
+def extract_evaluation_items_from_pdf(pdf_bytes: bytes) -> list[str]:
+    """Try to extract evaluation criteria from table structures using pdfplumber.
+    It looks for rows where one cell is a numeric weight (e.g., 40 or 40%),
+    and uses other cells in the same row to form the label.
+    """
+    if pdfplumber is None:
+        return []
+    results: list[tuple[str, int]] = []
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                tables = page.extract_tables() or []
+                for tb in tables:
+                    # Skip too small tables
+                    if not tb or len(tb) < 2:
+                        continue
+                    # Normalize table cells
+                    norm = [[(c or '').strip() for c in row] for row in tb]
+                    # Try to detect header row if contains 'ponderación'
+                    header_idx = 0
+                    for i in range(min(2, len(norm))):
+                        header_line = ' '.join(norm[i]).lower()
+                        if 'ponderacion' in _strip_accents(header_line) or '%' in header_line:
+                            header_idx = i
+                            break
+                    rows = norm[header_idx+1:] if header_idx < len(norm) else norm
+                    for row in rows:
+                        if not row:
+                            continue
+                        # Find a numeric cell to use as percent
+                        pct_val = None
+                        label_parts: list[str] = []
+                        for cell in row:
+                            txt = (cell or '').strip()
+                            if not txt:
+                                continue
+                            m_pct = re.fullmatch(r"(\d{1,3})\s*%?", _strip_accents(txt))
+                            if m_pct:
+                                try:
+                                    v = int(m_pct.group(1))
+                                    if 0 <= v <= 100:
+                                        pct_val = v
+                                        continue
+                                except Exception:
+                                    pass
+                            # Non-numeric, part of label
+                            label_parts.append(txt)
+                        if pct_val is not None and label_parts:
+                            label = ' '.join(label_parts)
+                            # Collapse whitespace
+                            label = re.sub(r"\s+", " ", label)
+                            # Trim overly generic tails
+                            label = label.strip(' -:\u2013\u2014')
+                            results.append((label, pct_val))
+    except Exception:
+        return []
+    # Dedup and stringify
+    seen = set()
+    out: list[str] = []
+    for label, pct in results:
+        key = (label.lower(), pct)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f"{label}: {pct}%")
+    return out
+
+def extract_evaluation_items_numeric_blocks(text: str) -> list[str]:
+    """Fallback parser for blocky layouts where weights appear as standalone numbers
+    (e.g., a 'PONDERACIÓN' column) and labels are contiguous text around them.
+    Heuristic: accumulate consecutive non-numeric lines as label; when a numeric-only
+    line (<=100) is encountered, emit label: pct% and reset.
+    Prefer running this within the evaluation section if available.
+    """
+    # Narrow to evaluation section if possible
+    section = extract_section(
+        text,
+        [
+            "criterios de evaluación", "criterios de evaluacion", "evaluación", "evaluacion",
+            "evaluación y calificación", "calificación", "calificacion",
+            "evaluation", "grading", "assessment", "ponderación", "ponderacion",
+        ],
+        max_length=3000,
+    )
+    search_text = section if section and section != "Not found" else text
+
+    items: list[tuple[str, int]] = []
+    label_buf: list[str] = []
+    for raw in search_text.splitlines():
+        line = (raw or '').strip()
+        if not line:
+            continue
+        # If it's a pure number or number with %
+        m = re.fullmatch(r"(\d{1,3})\s*%?", _strip_accents(line))
+        if m:
+            try:
+                v = int(m.group(1))
+                if 0 <= v <= 100 and label_buf:
+                    label = ' '.join(label_buf)
+                    label = re.sub(r"\s+", " ", label).strip(' -:\u2013\u2014')
+                    items.append((label, v))
+                    label_buf = []
+                    continue
+            except Exception:
+                pass
+        # Otherwise, accumulate text parts (skip headers like PONDERACIÓN single word)
+        low = _strip_accents(line.lower())
+        if low in {"ponderacion", "ponderación"}:
+            continue
+        label_buf.append(line)
+
+    # Dedup and stringify
+    seen = set()
+    out: list[str] = []
+    for label, pct in items:
+        key = (label.lower(), pct)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f"{label}: {pct}%")
+    return out
+
 # ------------------------------
 # Helpers separados para syllabus y schedule
 # ------------------------------
@@ -322,16 +579,17 @@ async def build_syllabus_pdf(files: List[UploadFile]) -> bytes:
             try:
                 nombre_curso = file.filename.rsplit('.', 1)[0]
                 contenido = await file.read()
-                reader = PdfReader(io.BytesIO(contenido))
-                texto = "\n".join(page.extract_text() or '' for page in reader.pages)
+                texto, pdf_warnings = extract_pdf_text(contenido, errores, file.filename)
                 fechas = extract_dates(texto)
                 temas = extract_section(texto, ["temario", "contenidos", "unidades", "temas"])
+                enum_temas = extract_enumerated_syllabus(texto)
                 recursos = extract_section(texto, ["bibliografía", "recursos", "lecturas", "material"])
                 nombre, email = extract_contact(texto)
                 reglamento = extract_section(texto, ["reglamento", "normas", "política", "condiciones"])
                 c.setFont("Helvetica-Bold", 14)
                 c.drawString(40, y, f"Course: {nombre_curso}")
                 y -= 22
+                # Suppress PDF warnings output per user request; still collected internally if needed.
                 c.setFont("Helvetica-Bold", 12)
                 c.drawString(40, y, "Important dates:")
                 y -= 18
@@ -341,15 +599,38 @@ async def build_syllabus_pdf(files: List[UploadFile]) -> bytes:
                     y -= 14
                     if y < 80:
                         c.showPage(); y = height - 40
+                # Evaluation criteria (prefer table-extracted > regex > numeric blocks)
+                eval_items = extract_evaluation_items_from_pdf(contenido)
+                if not eval_items:
+                    eval_items = extract_evaluation_items(texto)
+                if not eval_items:
+                    eval_items = extract_evaluation_items_numeric_blocks(texto)
+                if eval_items:
+                    c.setFont("Helvetica-Bold", 12)
+                    c.drawString(40, y, "Evaluation criteria:")
+                    y -= 18
+                    c.setFont("Helvetica", 11)
+                    for item in eval_items:
+                        c.drawString(60, y, item[:110])
+                        y -= 14
+                        if y < 80:
+                            c.showPage(); y = height - 40
                 c.setFont("Helvetica-Bold", 12)
                 c.drawString(40, y, "Syllabus:")
                 y -= 18
                 c.setFont("Helvetica", 11)
-                for line in temas.splitlines():
-                    c.drawString(60, y, line[:110])
-                    y -= 14
-                    if y < 80:
-                        c.showPage(); y = height - 40
+                if enum_temas:
+                    for line in enum_temas:
+                        c.drawString(60, y, line[:110])
+                        y -= 14
+                        if y < 80:
+                            c.showPage(); y = height - 40
+                else:
+                    for line in temas.splitlines():
+                        c.drawString(60, y, line[:110])
+                        y -= 14
+                        if y < 80:
+                            c.showPage(); y = height - 40
                 c.setFont("Helvetica-Bold", 12)
                 c.drawString(40, y, "Resources and bibliography:")
                 y -= 18
@@ -399,12 +680,22 @@ async def build_syllabus_pdf(files: List[UploadFile]) -> bytes:
         buffer.seek(0)
     return buffer.read()
 
-async def build_schedule_ics(files: List[UploadFile]) -> bytes | None:
+def _parse_semester_start(s: str | None):
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s.strip(), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+async def build_schedule_ics(files: List[UploadFile], semester_start: str | None = None) -> bytes | None:
     # Este endpoint asume que los archivos enviados corresponden a horarios.
     # Procesamos todos los PDF recibidos para mayor tolerancia.
     all_slots = []
     for file in files:
         contenido = await file.read()
+        # Sanitize before positional/table extraction attempts
+        contenido = sanitize_pdf_header(contenido)
         # 1) Intento posicional con pdfplumber si está disponible
         used_positional = False
         if pdfplumber is not None:
@@ -422,54 +713,95 @@ async def build_schedule_ics(files: List[UploadFile]) -> bytes | None:
                                 headers[weekday] = headers.get(weekday, []) + [x_center]
                         day_columns = {wd: sum(xs)/len(xs) for wd, xs in headers.items() if xs}
                         if day_columns:
-                            # Agrupar palabras por línea (tolerancia vertical)
-                            lines = {}
+                            # Buscar rangos de tiempo y asociarlos solo a columnas con contenido en esa fila
+                            # 1) Construir índices de palabras por proximidad vertical
+                            buckets: dict[int, list[dict]] = {}
                             for w in words:
                                 top = w.get('top', 0)
-                                key = round(top / 3)  # bucket simple
-                                lines.setdefault(key, []).append(w)
-                            for _, wlist in lines.items():
+                                key = round(top / 2)  # buckets más finos
+                                buckets.setdefault(key, []).append(w)
+                            # 2) En cada bucket, detectar rangos de tiempo y su banda vertical
+                            time_re = re.compile(rf"(?P<start>{TIME_TOKEN})\s*(?:-|–|—|a|to)\s*(?P<end>{TIME_TOKEN})", re.IGNORECASE)
+                            for _, wlist in buckets.items():
                                 wlist.sort(key=lambda w: w.get('x0', 0))
-                                line_text = ' '.join(w.get('text', '') for w in wlist)
-                                # Buscar rangos de tiempo en la línea
-                                for tm in re.finditer(rf"(?P<start>{TIME_TOKEN})\s*(?:-|–|—|a|to)\s*(?P<end>{TIME_TOKEN})", line_text, flags=re.IGNORECASE):
+                                line_text = ' '.join((w.get('text') or '') for w in wlist)
+                                for tm in time_re.finditer(line_text):
                                     start = _parse_time_24(tm.group('start'))
                                     end = _parse_time_24(tm.group('end'))
-                                    # Estimar x-center de los tokens numéricos en la línea
-                                    numeric_words = [w for w in wlist if re.search(r"\d", w.get('text',''))]
+                                    # Calcular centro vertical de la fila usando palabras numéricas
+                                    numeric_words = [w for w in wlist if re.search(r"\d", (w.get('text') or ''))]
                                     if not numeric_words:
                                         continue
-                                    x_center = sum((w.get('x0',0)+w.get('x1',0))/2 for w in numeric_words)/len(numeric_words)
-                                    # Asignar al día más cercano según columnas
-                                    if day_columns:
-                                        nearest_day = min(day_columns.items(), key=lambda kv: abs(kv[1]-x_center))[0]
-                                        all_slots.append((nearest_day, start, end))
-                            used_positional = True
+                                    y_center = sum((w.get('top', 0) + w.get('bottom', 0)) / 2 for w in numeric_words) / len(numeric_words)
+                                    # Asociar solo a columnas con texto no-horario cerca de esa banda
+                                    for weekday, col_x in day_columns.items():
+                                        # Palabras cerca de la columna y banda vertical
+                                        candidates = []
+                                        for w in wlist:
+                                            wx = (w.get('x0', 0) + w.get('x1', 0)) / 2
+                                            wy = (w.get('top', 0) + w.get('bottom', 0)) / 2
+                                            txt = (w.get('text') or '').strip()
+                                            if not txt:
+                                                continue
+                                            # ignorar encabezados de días y tokens horarios
+                                            low = _strip_accents(txt.lower())
+                                            if low in DAY_NAMES:
+                                                continue
+                                            if re.fullmatch(TIME_TOKEN, low):
+                                                continue
+                                            if abs(wx - col_x) <= 60 and abs(wy - y_center) <= 8:
+                                                candidates.append(txt)
+                                        if candidates:
+                                            all_slots.append((weekday, start, end))
+                used_positional = True
             except Exception:
                 used_positional = False
         # 2) Fallback por texto si no se pudo usar posicional o si no produjo slots
         if not used_positional or not all_slots:
-            reader = PdfReader(io.BytesIO(contenido))
-            texto = "\n".join(page.extract_text() or '' for page in reader.pages)
-            slots = extract_schedule(texto)
-            all_slots.extend(slots)
+            try:
+                reader = PdfReader(io.BytesIO(contenido))
+                texto = "\n".join(page.extract_text() or '' for page in reader.pages)
+            except Exception:
+                texto = ""
+            if texto:
+                slots = extract_schedule(texto)
+                all_slots.extend(slots)
     if not all_slots:
         return None
     cal = Calendar()
+    # Anchor to semester_start if provided; else use next weekday from today
+    anchor_date = _parse_semester_start(semester_start)
     today = datetime.today()
     for (weekday, start, end) in all_slots:
+        # Skip weekends by default to avoid false positives (enable if you truly have weekend classes)
+        if weekday >= 5:
+            continue
         start_time = datetime.strptime(start, "%H:%M")
         end_time = datetime.strptime(end, "%H:%M")
-        first_date = next_weekday(today, weekday)
-        event_start = first_date.replace(hour=start_time.hour, minute=start_time.minute, second=0, microsecond=0)
-        event_end = first_date.replace(hour=end_time.hour, minute=end_time.minute, second=0, microsecond=0)
-        event = Event()
-        event.name = "Class Session"
-        event.begin = event_start
-        event.end = event_end
-        event.uid = str(uuid.uuid4())
-        event.description = "Imported from schedule PDF."
-        cal.events.add(event)
+        if anchor_date is not None:
+            # find the date in the anchor week that matches this weekday
+            # compute Monday of anchor week
+            anchor_monday = anchor_date - timedelta(days=anchor_date.weekday())
+            first_date = anchor_monday + timedelta(days=weekday)
+            # if anchor_date is after that weekday within the same week, push to next week to keep future
+            if first_date < anchor_date:
+                first_date = first_date + timedelta(days=7)
+            first_date = datetime.combine(first_date, datetime.min.time())
+        else:
+            first_date = next_weekday(today, weekday)
+        # Crear 15 ocurrencias semanales
+        for wk in range(15):
+            occ_start = first_date + timedelta(days=7 * wk)
+            event_start = occ_start.replace(hour=start_time.hour, minute=start_time.minute, second=0, microsecond=0)
+            event_end = occ_start.replace(hour=end_time.hour, minute=end_time.minute, second=0, microsecond=0)
+            event = Event()
+            event.name = "Class Session"
+            # Keep naive datetimes (no 'Z' UTC) to avoid timezone shifts on import
+            event.begin = event_start
+            event.end = event_end
+            event.uid = str(uuid.uuid4())
+            event.description = "Imported from schedule PDF."
+            cal.events.add(event)
     return str(cal).encode("utf-8")
 
 # ------------------------------
@@ -483,8 +815,8 @@ async def endpoint_syllabus(files: List[UploadFile] = File(...)):
     })
 
 @app.post("/schedule")
-async def endpoint_schedule(files: List[UploadFile] = File(...)):
-    ics_bytes = await build_schedule_ics(files)
+async def endpoint_schedule(files: List[UploadFile] = File(...), semester_start: str | None = Form(None)):
+    ics_bytes = await build_schedule_ics(files, semester_start=semester_start)
     if not ics_bytes:
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=422, content={"detail": "No schedule found in uploaded files."})
@@ -493,7 +825,7 @@ async def endpoint_schedule(files: List[UploadFile] = File(...)):
     })
 
 @app.post("/generar")
-async def generar_pdf(files: List[UploadFile] = File(...)):
+async def generar_pdf(files: List[UploadFile] = File(...), semester_start: str | None = Form(None)):
     print("[LOG] Iniciando procesamiento de archivos...")
     from fastapi.responses import StreamingResponse
     import tempfile
@@ -516,20 +848,15 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
             schedule_files.append(file)
         else:
             syllabus_files.append(file)
-    all_slots = []
-    # Procesar archivos de horario para eventos académicos
-    for file in schedule_files:
+    # Generar ICS con la misma lógica robusta que el endpoint /schedule
+    ics_bytes = None
+    if schedule_files:
         try:
-            contenido = await file.read()
-            reader = PdfReader(io.BytesIO(contenido))
-            texto = "\n".join(page.extract_text() or '' for page in reader.pages)
-            slots = extract_schedule(texto)
-            if slots:
-                all_slots.extend(slots)
+            ics_bytes = await build_schedule_ics(schedule_files, semester_start=semester_start)
         except Exception as e:
             tb = traceback.format_exc()
-            print(f"[ERROR] Falló el procesamiento de horario {file.filename}: {e}\n{tb}")
-            errores.append(f"Horario {file.filename}: {e}")
+            print(f"[ERROR] Falló la generación de ICS (combinado): {e}\n{tb}")
+            errores.append(f"ICS: {e}")
     # Procesar archivos de syllabus para el PDF resumen
     pdf_bytes = None
     if syllabus_files:
@@ -540,12 +867,12 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
                     nombre_curso = file.filename.rsplit('.', 1)[0]
                     contenido = await file.read()
                     print(f"[LOG] Leyendo PDF: {file.filename}")
-                    reader = PdfReader(io.BytesIO(contenido))
-                    texto = "\n".join(page.extract_text() or '' for page in reader.pages)
+                    texto, pdf_warnings = extract_pdf_text(contenido, errores, file.filename)
                     print(f"[LOG] Extrayendo fechas importantes...")
                     fechas = extract_dates(texto)
                     print(f"[LOG] Extrayendo temario...")
                     temas = extract_section(texto, ["temario", "contenidos", "unidades", "temas"])
+                    enum_temas = extract_enumerated_syllabus(texto)
                     print(f"[LOG] Extrayendo recursos y bibliografía...")
                     recursos = extract_section(texto, ["bibliografía", "recursos", "lecturas", "material"])
                     print(f"[LOG] Extrayendo contacto docente...")
@@ -556,6 +883,7 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
                     c.setFont("Helvetica-Bold", 14)
                     c.drawString(40, y, f"Course: {nombre_curso}")
                     y -= 22
+                    # Suppress PDF warnings output per user request.
                     c.setFont("Helvetica-Bold", 12)
                     c.drawString(40, y, "Important dates:")
                     y -= 18
@@ -565,15 +893,38 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
                         y -= 14
                         if y < 80:
                             c.showPage(); y = height - 40
+                    # Evaluation criteria (prefer table-extracted > regex > numeric blocks)
+                    eval_items = extract_evaluation_items_from_pdf(contenido)
+                    if not eval_items:
+                        eval_items = extract_evaluation_items(texto)
+                    if not eval_items:
+                        eval_items = extract_evaluation_items_numeric_blocks(texto)
+                    if eval_items:
+                        c.setFont("Helvetica-Bold", 12)
+                        c.drawString(40, y, "Evaluation criteria:")
+                        y -= 18
+                        c.setFont("Helvetica", 11)
+                        for item in eval_items:
+                            c.drawString(60, y, item[:110])
+                            y -= 14
+                            if y < 80:
+                                c.showPage(); y = height - 40
                     c.setFont("Helvetica-Bold", 12)
                     c.drawString(40, y, "Syllabus:")
                     y -= 18
                     c.setFont("Helvetica", 11)
-                    for line in temas.splitlines():
-                        c.drawString(60, y, line[:110])
-                        y -= 14
-                        if y < 80:
-                            c.showPage(); y = height - 40
+                    if enum_temas:
+                        for line in enum_temas:
+                            c.drawString(60, y, line[:110])
+                            y -= 14
+                            if y < 80:
+                                c.showPage(); y = height - 40
+                    else:
+                        for line in temas.splitlines():
+                            c.drawString(60, y, line[:110])
+                            y -= 14
+                            if y < 80:
+                                c.showPage(); y = height - 40
                     c.setFont("Helvetica-Bold", 12)
                     c.drawString(40, y, "Resources and bibliography:")
                     y -= 18
@@ -631,25 +982,7 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
             buffer.seek(0)
             print("[LOG] Final PDF generated and ready to send to frontend.")
             pdf_bytes = buffer.read()
-    # Si hay horarios, generar ICS
-    ics_bytes = None
-    if all_slots:
-        cal = Calendar()
-        today = datetime.today()
-        for idx, (weekday, start, end) in enumerate(all_slots):
-            start_time = datetime.strptime(start, "%H:%M")
-            end_time = datetime.strptime(end, "%H:%M")
-            first_date = next_weekday(today, weekday)
-            event_start = first_date.replace(hour=start_time.hour, minute=start_time.minute, second=0, microsecond=0)
-            event_end = first_date.replace(hour=end_time.hour, minute=end_time.minute, second=0, microsecond=0)
-            event = Event()
-            event.name = f"Class Session"
-            event.begin = event_start
-            event.end = event_end
-            event.uid = str(uuid.uuid4())
-            event.description = f"Imported from schedule PDF."
-            cal.events.add(event)
-        ics_bytes = str(cal).encode("utf-8")
+    # ics_bytes ya contiene el calendario si había archivos de horario
     # Responder un único archivo simple para facilitar al frontend
     from fastapi.responses import Response
     if pdf_bytes and ics_bytes:
