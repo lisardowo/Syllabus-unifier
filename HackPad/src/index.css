@@ -2,7 +2,6 @@
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  position: fixed;
   color-scheme: light dark;
   color: rgba(255, 255, 255, 0.87);
   background-color: transparent; /* allow WebGL background to show */
@@ -24,7 +23,6 @@ a:hover {
 
 html, body, #root {
   height: 100%;
-  position:fixed;                                                                                                                                                                             
 }
 
 body {
@@ -34,6 +32,13 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background: transparent; /* show background effect */
+  overflow: hidden; /* disable scroll and scrollbars */
+  -ms-overflow-style: none;  /* IE/Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+
+body::-webkit-scrollbar {     /* Chrome/Safari/Opera */
+  display: none;
 }
 
 h1 {

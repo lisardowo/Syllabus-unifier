@@ -33,3 +33,14 @@ The theme was right in front of y'all the ENTIRE time.
 GPT-4.1	
     General-purpose coding and writing	Fast, accurate code completions and explanations // General purpose coding
     Agent mode, vision
+
+'''
+
+Comandos
+
+''''
+
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+
+uvicorn main:app --reload --port 8000

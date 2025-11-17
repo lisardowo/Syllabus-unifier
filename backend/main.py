@@ -9,31 +9,40 @@ import io
 from datetime import datetime
 import traceback
 
-MONTHS_ES = {
+MONTHS = {
+    # Spanish
     'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4, 'mayo': 5, 'junio': 6,
     'julio': 7, 'agosto': 8, 'septiembre': 9, 'setiembre': 9, 'octubre': 10,
-    'noviembre': 11, 'diciembre': 12
+    'noviembre': 11, 'diciembre': 12,
+    # English
+    'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+    'july': 7, 'august': 8, 'september': 9, 'october': 10,
+    'november': 11, 'december': 12
 }
 
 DATE_PATTERNS = [
     # 12/05 or 12-05
     r"(?P<d1>\d{1,2})[\/\-](?P<m1>\d{1,2})(?:[\/\-](?P<y1>\d{2,4}))?",
-    # 12 de mayo (optional year) / 12 mayo
+    # 12 de mayo (optional year) / 12 mayo / 12 May
     r"(?P<d2>\d{1,2})\s*(?:de\s*)?(?P<m2>\w+)(?:\s+de\s+(?P<y2>\d{4}))?",
-    # mayo 12 (optional year)
+    # mayo 12 (optional year) / May 12
     r"(?P<m3>\w+)\s+(?P<d3>\d{1,2})(?:\s+de\s+(?P<y3>\d{4}))?"
 ]
 
-EVENT_KEYWORDS = ['examen', 'entrega', 'vence', 'tarea', 'proyecto']
+EVENT_KEYWORDS = [
+    # Spanish
+    'examen', 'entrega', 'vence', 'tarea', 'proyecto',
+    # English
+    'exam', 'deadline', 'due', 'assignment', 'project'
+]
 
 def try_parse_date(fragment: str) -> datetime | None:
-    """Intentar normalizar un fragmento de fecha a datetime (sin hora -> 09:00)."""
+    """Try to normalize a date fragment to datetime (default hour 09:00). Supports Spanish and English."""
     lower = fragment.lower()
     for pattern in DATE_PATTERNS:
         m = re.search(pattern, lower)
         if not m:
             continue
-        # Extract possible groups
         day = None
         month = None
         year = None
@@ -46,25 +55,24 @@ def try_parse_date(fragment: str) -> datetime | None:
         elif m.groupdict().get('d2'):
             day = int(m.group('d2'))
             month_name = m.group('m2')
-            month = MONTHS_ES.get(month_name.lower())
+            month = MONTHS.get(month_name.lower())
             y = m.group('y2')
             if y:
                 year = int(y)
         elif m.groupdict().get('d3'):
             day = int(m.group('d3'))
             month_name = m.group('m3')
-            month = MONTHS_ES.get(month_name.lower())
+            month = MONTHS.get(month_name.lower())
             y = m.group('y3')
             if y:
                 year = int(y)
         if day and month:
             if not year:
-                # Heurística: usar año actual, y si la fecha ya pasó más de 30 días, asumir próximo año (cursos cruzando año nuevo)
                 today = datetime.today()
                 tentative = datetime(today.year, month, day)
                 if (tentative - today).days < -30:
                     tentative = datetime(today.year + 1, month, day)
-                return tentative.replace(hour=9, minute=0)  # hora por defecto
+                return tentative.replace(hour=9, minute=0)
             return datetime(year, month, day, 9, 0)
     return None
 
@@ -113,27 +121,26 @@ def extract_dates(text):
     return results
 
 def extract_section(text, section_names, max_length=1000):
-    # Busca la sección por nombre y extrae hasta el siguiente salto de sección
+    # Search for section by name (Spanish or English) and extract until next section break
     for name in section_names:
         m = re.search(rf"{name}[:\n]", text, re.IGNORECASE)
         if m:
             start = m.end()
-            # Busca el siguiente título de sección (mayúsculas, salto de línea, etc)
             end = re.search(r"\n[A-ZÁÉÍÓÚÑ ]{4,}[:\n]", text[start:])
             end_idx = start + end.start() if end else start + max_length
             return text[start:end_idx].strip()
-    return "No encontrado"
+    return "Not found"
 
 def extract_contact(text):
-    # Busca email y nombre cerca de palabras clave
+    # Search for email and name near keywords (Spanish and English)
     email = re.search(r"[\w\.-]+@[\w\.-]+", text)
     name = None
-    for kw in ["profesor", "docente", "contacto", "responsable"]:
+    for kw in ["profesor", "docente", "contacto", "responsable", "teacher", "instructor", "contact", "faculty"]:
         m = re.search(rf"{kw}[:\n ]+([A-ZÁÉÍÓÚÑa-záéíóúñ ]{{5,}})", text, re.IGNORECASE)
         if m:
             name = m.group(1).strip()
             break
-    return name or "No encontrado", email.group(0) if email else "No encontrado"
+    return name or "Not found", email.group(0) if email else "Not found"
 
 @app.post("/generar")
 async def generar_pdf(files: List[UploadFile] = File(...)):
@@ -143,7 +150,7 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
     width, height = letter
     y = height - 40
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(40, y, "Resumen Académico Unificado")
+    c.drawString(40, y, "Unified Academic Summary")
     y -= 30
     c.setFont("Helvetica", 12)
     errores: list[str] = []
@@ -168,10 +175,10 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
                 reglamento = extract_section(texto, ["reglamento", "normas", "política", "condiciones"])
                 print(f"[LOG] Generando PDF para {nombre_curso}")
                 c.setFont("Helvetica-Bold", 14)
-                c.drawString(40, y, f"Curso: {nombre_curso}")
+                c.drawString(40, y, f"Course: {nombre_curso}")
                 y -= 22
                 c.setFont("Helvetica-Bold", 12)
-                c.drawString(40, y, "Fechas importantes:")
+                c.drawString(40, y, "Important dates:")
                 y -= 18
                 c.setFont("Helvetica", 11)
                 for f in fechas:
@@ -180,7 +187,7 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
                     if y < 80:
                         c.showPage(); y = height - 40
                 c.setFont("Helvetica-Bold", 12)
-                c.drawString(40, y, "Temario:")
+                c.drawString(40, y, "Syllabus:")
                 y -= 18
                 c.setFont("Helvetica", 11)
                 for line in temas.splitlines():
@@ -189,7 +196,7 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
                     if y < 80:
                         c.showPage(); y = height - 40
                 c.setFont("Helvetica-Bold", 12)
-                c.drawString(40, y, "Recursos y bibliografía:")
+                c.drawString(40, y, "Resources and bibliography:")
                 y -= 18
                 c.setFont("Helvetica", 11)
                 for line in recursos.splitlines():
@@ -198,17 +205,17 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
                     if y < 80:
                         c.showPage(); y = height - 40
                 c.setFont("Helvetica-Bold", 12)
-                c.drawString(40, y, "Contacto docente:")
+                c.drawString(40, y, "Instructor contact:")
                 y -= 18
                 c.setFont("Helvetica", 11)
-                c.drawString(60, y, f"Nombre: {nombre}")
+                c.drawString(60, y, f"Name: {nombre}")
                 y -= 14
                 c.drawString(60, y, f"Email: {email}")
                 y -= 18
                 if y < 80:
                     c.showPage(); y = height - 40
                 c.setFont("Helvetica-Bold", 12)
-                c.drawString(40, y, "Reglamento especial:")
+                c.drawString(40, y, "Special rules:")
                 y -= 18
                 c.setFont("Helvetica", 11)
                 for line in reglamento.splitlines():
@@ -227,7 +234,7 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
         if errores:
             c.showPage()
             c.setFont("Helvetica-Bold", 14)
-            c.drawString(40, height - 60, "Archivos con errores de procesamiento:")
+            c.drawString(40, height - 60, "Files with processing errors:")
             c.setFont("Helvetica", 11)
             yerr = height - 90
             for msg in errores:
@@ -237,14 +244,14 @@ async def generar_pdf(files: List[UploadFile] = File(...)):
                     c.showPage(); yerr = height - 60
     except Exception as e:
         tb = traceback.format_exc()
-        print(f"[ERROR] Fallo inesperado en /generar: {e}\n{tb}")
-        # cerramos PDF con nota de error
+        print(f"[ERROR] Unexpected failure in /generar: {e}\n{tb}")
+        # close PDF with error note
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(40, y, "Se produjo un error inesperado durante el procesamiento.")
+        c.drawString(40, y, "An unexpected error occurred during processing.")
     finally:
         c.save()
         buffer.seek(0)
-    print("[LOG] PDF final generado y listo para enviar al frontend.")
+    print("[LOG] Final PDF generated and ready to send to frontend.")
     return Response(content=buffer.read(), media_type="application/pdf", headers={
         "Content-Disposition": "attachment; filename=syllabus_unificado.pdf"
     })

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useDropzone } from 'react-dropzone';
-
+import './FileUpload.css';
 function FileUpload({ onFilesSelected }) {
   const { getRootProps, getInputProps, acceptedFiles } = useDropzone({
     accept: { 'application/pdf': ['.pdf'] },
@@ -14,10 +14,12 @@ function FileUpload({ onFilesSelected }) {
     <section className="file-upload">
       <div {...getRootProps({ className: 'dropzone' })}>
         <input {...getInputProps()} />
-        <p className="cursor-target">Arrastra y suelta tus archivos PDF aquí, o haz clic para seleccionarlos.</p>
+        <p>
+          <span className="cursor-target cursor-target--inline">Drag and drop your PDF files here, or click to select them</span>.
+        </p>
       </div>
       <aside>
-        <h4>Archivos seleccionados:</h4>
+        <h4>Selected files:</h4>
         <ul>
           {acceptedFiles.map(file => (
             <li key={file.path || file.name}>{file.path || file.name}</li>

@@ -1,0 +1,9 @@
+/* Restringe el área del cursor a la palabra envuelta */
+.cursor-target--inline {
+  display: inline-block;       /* ajusta el bounding al texto */
+  width: fit-content;
+  line-height: 1;
+  white-space: nowrap;         /* evita saltos que agranden el área */
+  padding: 0 0.1em;            /* opcional: un poco de aire */
+  border-radius: 4px;          /* opcional: esquinas suaves */
+}

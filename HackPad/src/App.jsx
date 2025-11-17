@@ -63,7 +63,7 @@ function App() {
 
   return (
     <div style={{ width: '100%', minHeight: '100vh', position: 'relative' }}>
-      {/* DarkVeil full-page background */}
+      {/* Fondo DarkVeil fijo */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none' }}>
         <DarkVeil
           hueShift={0}
@@ -76,42 +76,66 @@ function App() {
         />
       </div>
 
-      <div className="App" style={{ position: 'relative', zIndex: 2, background: 'transparent' }}>
-        <h1>Generador de Resumen de Syllabus (PDF)</h1>
-        <FileUpload onFilesSelected={handleFilesSelected} />
-        {error && <p style={{ color: 'red' }}>{error}</p>}
+      {/* Capa del TargetCursor (no bloquea clics) */}
+      <div style={{ position: 'fixed', inset: 0, zIndex: 1, pointerEvents: 'none' }}>
         <TargetCursor
           spinDuration={2}
           hideDefaultCursor={true}
           parallaxOn={true}
         />
-        <button
-          className='cursor-target'
-          onClick={handleSubmit}
-          disabled={isLoading || files.length === 0}
-          style={{ marginTop: '1rem' }}
+      </div>
+
+      {/* Contenido interactivo por encima */}
+      <div
+        style={{
+          position: 'relative',
+          zIndex: 2,
+          background: 'transparent',
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div
+          className="App"
+          style={{
+            width: '100%',
+            padding: '1rem',
+            transform: 'translateY(6vh)',
+          }}
         >
-          {isLoading ? 'Procesando...' : 'Generar Resumen'}
-        </button>
-        {isLoading && (
-          <div style={{ marginTop: '1rem', width: '100%' }}>
-            <div style={{ background: '#eee', borderRadius: '8px', height: '18px', width: '60%', margin: '0 auto', overflow: 'hidden' }}>
-              <div style={{ background: '#646cff', height: '100%', width: `${progress}%`, transition: 'width 0.3s' }} />
+          <h1>Syllabus unifier and Summarizer (PDF)</h1>
+          <FileUpload onFilesSelected={handleFilesSelected} />
+          {error && <p style={{ color: 'red' }}>{error}</p>}
+          <button
+            className='cursor-target'
+            onClick={handleSubmit}
+            disabled={isLoading || files.length === 0}
+            style={{ marginTop: '1rem' }}
+          >
+            {isLoading ? 'Processing...' : 'Generate Summary'}
+          </button>
+          {isLoading && (
+            <div style={{ marginTop: '1rem', width: '100%' }}>
+              <div style={{ background: '#eee', borderRadius: '8px', height: '18px', width: '60%', margin: '0 auto', overflow: 'hidden' }}>
+                <div style={{ background: '#646cff', height: '100%', width: `${progress}%`, transition: 'width 0.3s' }} />
+              </div>
+              <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '0.95em' }}>{progress}%</div>
+              <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '1em', color: '#646cff' }}>{statusText}</div>
             </div>
-            <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '0.95em' }}>{progress}%</div>
-            <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '1em', color: '#646cff' }}>{statusText}</div>
-          </div>
-        )}
-        {files.length > 0 && (
-          <div style={{ marginTop: '1rem' }}>
-            <h4>Archivos listos para enviar:</h4>
-            <ul>
-              {files.map((file) => (
-                <li key={file.name}>{file.name}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+          )}
+          {files.length > 0 && (
+            <div style={{ marginTop: '1rem' }}>
+              <h4>Files ready to process:</h4>
+              <ul>
+                {files.map((file) => (
+                  <li key={file.name}>{file.name}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
