@@ -3,3 +3,4 @@ uvicorn
 pypdf
 ics
 python-multipart
+reportlab
